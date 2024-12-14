@@ -26,8 +26,8 @@ public sealed class PluginConfig : BasePluginConfig
 	[JsonPropertyName("FlashlightRange")]
 	public float FlashlightRange { get; set; } = 750f;
 
-	[JsonPropertyName("DetectUseButton")]
-	public bool DetectUseButton { get; set; } = true;
+	[JsonPropertyName("DetectInspectButton")]
+	public bool DetectInspectButton { get; set; } = true;
 
 	[JsonPropertyName("RegisterCommands")]
 	public List<string> RegisterCommands { get; set; } = ["flashlight", "fl"];
@@ -55,6 +55,7 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	private const float DUCK_HEIGHT = 43.50f;
 	private const float STAND_HEIGHT = 61.75f;
 	private const int DIRECT_LIGHT = 3;
+	private const ulong ACTIVATE_BUTTON = 34359738368;
 
 	public override void Load(bool hotReload)
 	{
@@ -107,7 +108,7 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				_flashlightData[userId] = data;
 			}
 
-			if (!Config.DetectUseButton)
+			if (Config.DetectInspectButton)
 				HandleFlashlightToggle(player, data);
 
 			UpdateFlashlightPosition(player, data);
@@ -119,7 +120,7 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private void HandleFlashlightToggle(CCSPlayerController player, FlashlightData data)
 	{
-		if (!player.Buttons.HasFlag(PlayerButtons.Use))
+		if (!player.Buttons.HasFlag((PlayerButtons)ACTIVATE_BUTTON))
 		{
 			data.WasButtonPressed = false;
 			return;
