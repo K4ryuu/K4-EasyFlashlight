@@ -94,8 +94,6 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 
 	private void OnTick()
 	{
-		if (!Config.DetectUseButton) return;
-
 		foreach (var player in Utilities.GetPlayers())
 		{
 			if (!IsValidPlayer(player)) continue;
@@ -109,7 +107,9 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 				_flashlightData[userId] = data;
 			}
 
-			HandleFlashlightToggle(player, data);
+			if (!Config.DetectUseButton)
+				HandleFlashlightToggle(player, data);
+
 			UpdateFlashlightPosition(player, data);
 		}
 	}
