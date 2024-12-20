@@ -1,0 +1,30 @@
+Available buttons for config:
+	Attack      - Primary attack button (MOUSE1)
+	Jump        - Jump (SPACE)
+	Duck        - Crouch (CTRL)
+	Forward     - Move forward (W)
+	Back        - Move backward (S)
+	Use         - Use key (E)
+	Cancel      - Cancel action
+	Left        - Turn left
+	Right       - Turn right
+	Moveleft    - Strafe left (A)
+	Moveright   - Strafe right (D)
+	Attack2     - Secondary attack button (MOUSE2)
+	Run         - Run
+	Reload      - Reload weapon (R)
+	Alt1        - Alternative button 1
+	Alt2        - Alternative button 2
+	Speed       - Sprint/Fast movement
+	Walk        - Walk
+	Zoom        - Zoom view (MOUSE2)
+	Weapon1     - Primary weapon (1)
+	Weapon2     - Secondary weapon (2)
+	Bullrush    - Bullrush
+	Grenade1    - First grenade
+	Grenade2    - Second grenade
+	Attack3     - Third attack
+	Scoreboard  - Show scoreboard (TAB)
+	Inspect     - Inspect weapon (F)
+
+Use only the names such as "Attack", "Jump", "Duck", etc. to configure the buttons.

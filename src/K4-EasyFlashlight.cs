@@ -1,11 +1,14 @@
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Utils;
+using Microsoft.Extensions.Logging;
 
 namespace CS2EasyFlashlight;
 
@@ -26,14 +29,23 @@ public sealed class PluginConfig : BasePluginConfig
 	[JsonPropertyName("FlashlightRange")]
 	public float FlashlightRange { get; set; } = 750f;
 
-	[JsonPropertyName("DetectInspectButton")]
-	public bool DetectInspectButton { get; set; } = true;
+	[JsonPropertyName("FlashlightDistanceFromBody")]
+	public float FlashlightDistanceFromBody { get; set; } = 25f;
+
+	[JsonPropertyName("DetectButtonPress")]
+	public bool DetectButtonPress { get; set; } = true;
+
+	[JsonPropertyName("ButtonListener")]
+	public string ButtonListener { get; set; } = "Inspect";
+
+	[JsonPropertyName("HideOtherFlashlights")]
+	public bool HideOtherFlashlights { get; set; } = true;
 
 	[JsonPropertyName("RegisterCommands")]
 	public List<string> RegisterCommands { get; set; } = ["flashlight", "fl"];
 
 	[JsonPropertyName("ConfigVersion")]
-	public override int Version { get; set; } = 1;
+	public override int Version { get; set; } = 3;
 }
 
 [MinimumApiVersion(270)]
@@ -42,20 +54,77 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	public override string ModuleName => "CS2 Easy Flashlight";
 	public override string ModuleAuthor => "K4ryuu";
 	public override string ModuleDescription => "A simple plugin that allows you to toggle the flashlight with a command or a keybind.";
-	public override string ModuleVersion => "1.0.0";
+	public override string ModuleVersion => "1.0.1";
 
 	public required PluginConfig Config { get; set; } = new();
-	public void OnConfigParsed(PluginConfig config) => Config = config;
-
-	private readonly Dictionary<int, FlashlightData> _flashlightData = [];
+	private readonly Dictionary<ulong, FlashlightData> _flashlightData = [];
 	private Color _cachedColor;
 	private static readonly DateTime MinToggleTime = DateTime.MinValue;
 
 	private const float TOGGLE_COOLDOWN = 0.25f;
-	private const float DUCK_HEIGHT = 43.50f;
-	private const float STAND_HEIGHT = 61.75f;
-	private const int DIRECT_LIGHT = 3;
-	private const ulong ACTIVATE_BUTTON = 34359738368;
+	private static ulong ACTIVATE_BUTTON = 1UL << 35;
+
+	public void OnConfigParsed(PluginConfig config)
+	{
+		UpdateConfig(config);
+		this.Config = config;
+
+		ACTIVATE_BUTTON = ParseButtonByName(config.ButtonListener);
+	}
+
+	private ulong ParseButtonByName(string buttonName)
+	{
+		switch (buttonName)
+		{
+			case "Scoreboard":
+				return 1UL << 33;
+			case "Inspect":
+				return 1UL << 35;
+		}
+
+		if (Enum.TryParse<PlayerButtons>(buttonName, true, out var button))
+		{
+			return (ulong)button;
+		}
+
+		Logger.LogError($"Warning: Invalid button name '{buttonName}', falling back to default. Available buttons listed in available-buttons.txt");
+		return 1UL << 35;
+	}
+
+	private void UpdateConfig<T>(T config) where T : BasePluginConfig, new()
+	{
+		int newVersion = new T().Version;
+
+		if (config.Version == newVersion)
+		{
+			Logger.LogInformation($"🔄 Configuration is already up-to-date with version {newVersion}. No update required.");
+			return;
+		}
+
+		Logger.LogInformation($"✨ Updating configuration from version {config.Version} to {newVersion}...");
+
+		config.Version = newVersion;
+
+		string? assemblyName = Assembly.GetExecutingAssembly().GetName().Name;
+		if (assemblyName is null)
+		{
+			Logger.LogError("❌ Failed to update configuration: Assembly name could not be determined.");
+			return;
+		}
+
+		try
+		{
+			string configPath = $"{Server.GameDirectory}/csgo/addons/counterstrikesharp/configs/plugins/{assemblyName}/{assemblyName}.json";
+			var updatedJsonContent = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+			File.WriteAllText(configPath, updatedJsonContent);
+
+			Logger.LogInformation($"✅ Configuration updated successfully. New version: {newVersion}.");
+		}
+		catch (Exception ex)
+		{
+			Logger.LogError($"❌ Failed to update configuration: {ex.Message}");
+		}
+	}
 
 	public override void Load(bool hotReload)
 	{
@@ -66,6 +135,30 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect, HookMode.Post);
 
 		RegisterCommands();
+
+		if (Config.HideOtherFlashlights)
+		{
+			RegisterListener<Listeners.CheckTransmit>((CCheckTransmitInfoList infoList) =>
+			{
+				foreach ((CCheckTransmitInfo info, CCSPlayerController? player) in infoList)
+				{
+					if (player == null)
+						continue;
+
+					foreach (var light in _flashlightData)
+					{
+						if (light.Key == player.SteamID)
+							continue;
+
+						var lightEntity = light.Value.Flashlight?.Entity;
+						if (lightEntity?.IsValid == true)
+						{
+							info.TransmitEntities.Remove(lightEntity);
+						}
+					}
+				}
+			});
+		}
 	}
 
 	private void RegisterCommands()
@@ -81,13 +174,10 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	{
 		if (!IsValidPlayer(player)) return;
 
-		var userId = player!.UserId ?? 0;
-		if (userId == 0) return;
-
-		if (!_flashlightData.TryGetValue(userId, out var data))
+		if (!_flashlightData.TryGetValue(player!.SteamID, out var data))
 		{
 			data = new FlashlightData();
-			_flashlightData[userId] = data;
+			_flashlightData[player!.SteamID] = data;
 		}
 
 		ToggleFlashlight(player, data);
@@ -99,16 +189,13 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		{
 			if (!IsValidPlayer(player)) continue;
 
-			var userId = player.UserId ?? 0;
-			if (userId == 0) continue;
-
-			if (!_flashlightData.TryGetValue(userId, out var data))
+			if (!_flashlightData.TryGetValue(player!.SteamID, out var data))
 			{
 				data = new FlashlightData();
-				_flashlightData[userId] = data;
+				_flashlightData[player!.SteamID] = data;
 			}
 
-			if (Config.DetectInspectButton)
+			if (Config.DetectButtonPress)
 				HandleFlashlightToggle(player, data);
 
 			UpdateFlashlightPosition(player, data);
@@ -116,7 +203,7 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	}
 
 	private static bool IsValidPlayer(CCSPlayerController? player) =>
-		player is { IsValid: true, IsBot: false, UserId: not null };
+		player is { IsValid: true, IsBot: false, IsHLTV: false } && player.PlayerPawn?.IsValid == true;
 
 	private void HandleFlashlightToggle(CCSPlayerController player, FlashlightData data)
 	{
@@ -144,12 +231,12 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		}
 
 		data.Flashlight = new Flashlight(this, player, in _cachedColor);
-		data.Flashlight.Create(player.Buttons.HasFlag(PlayerButtons.Duck));
+		data.Flashlight.Create();
 	}
 
 	private static void UpdateFlashlightPosition(CCSPlayerController player, FlashlightData data)
 	{
-		data.Flashlight?.Teleport(player.Buttons.HasFlag(PlayerButtons.Duck));
+		data.Flashlight?.Teleport();
 	}
 
 	private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
@@ -168,7 +255,7 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 	{
 		if (player?.UserId != null)
 		{
-			if (_flashlightData.Remove(player.UserId.Value, out var data))
+			if (_flashlightData.Remove(player!.SteamID, out var data))
 			{
 				data.Flashlight?.Dispose();
 			}
@@ -187,6 +274,23 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		CleanupFlashlight();
 	}
 
+	public static Vector GetEyePosition(CCSPlayerController player)
+	{
+		Vector absorigin = player.PlayerPawn.Value!.AbsOrigin!;
+		CPlayer_CameraServices camera = player.PlayerPawn.Value!.CameraServices!;
+		return new Vector(absorigin.X, absorigin.Y, absorigin.Z + camera.OldPlayerViewOffsetZ);
+	}
+
+	public static Vector GetDirectionOffset(float yawDegrees, float offsetValue)
+	{
+		float yawRadians = yawDegrees * (float)Math.PI / 180f;
+		return new Vector(
+			offsetValue * (float)Math.Cos(yawRadians),
+			offsetValue * (float)Math.Sin(yawRadians),
+			0
+		);
+	}
+
 	private sealed class FlashlightData
 	{
 		public Flashlight? Flashlight;
@@ -199,7 +303,7 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 		private readonly Plugin _plugin;
 		private readonly CCSPlayerController _player;
 		private readonly Color _color;
-		private COmniLight? _entity;
+		public COmniLight? Entity;
 		private bool _isDisposed;
 
 		public Flashlight(Plugin plugin, CCSPlayerController player, in Color color)
@@ -209,49 +313,49 @@ public sealed class Plugin : BasePlugin, IPluginConfig<PluginConfig>
 			_color = color;
 		}
 
-		public void Create(bool isDucking)
+		public void Create()
 		{
 			if (_isDisposed) return;
 
-			_entity = Utilities.CreateEntityByName<COmniLight>("light_omni2");
-			if (_entity == null || !_entity.IsValid) return;
+			Entity = Utilities.CreateEntityByName<COmniLight>("light_omni2");
+			if (Entity == null || !Entity.IsValid) return;
 
-			_entity.DirectLight = DIRECT_LIGHT;
-			Teleport(isDucking);
+			Entity.DirectLight = 3;
+			Teleport();
 
-			_entity.OuterAngle = _plugin.Config.FlashlightAngle;
-			_entity.Enabled = true;
-			_entity.Color = _color;
-			_entity.ColorTemperature = _plugin.Config.FlashlightColorTemperature;
-			_entity.Brightness = _plugin.Config.FlashlightBrightness;
-			_entity.Range = _plugin.Config.FlashlightRange;
-			_entity.DispatchSpawn();
+			Entity.OuterAngle = _plugin.Config.FlashlightAngle;
+			Entity.Enabled = true;
+			Entity.Color = _color;
+			Entity.ColorTemperature = _plugin.Config.FlashlightColorTemperature;
+			Entity.Brightness = _plugin.Config.FlashlightBrightness;
+			Entity.Range = _plugin.Config.FlashlightRange;
+			Entity.DispatchSpawn();
 		}
 
-		public void Teleport(bool isDucking)
+		public void Teleport()
 		{
-			if (_isDisposed || _entity == null || !_entity.IsValid || _player.PlayerPawn.Value?.AbsOrigin == null)
+			if (_isDisposed || Entity?.IsValid != true || _player.PlayerPawn.Value == null)
 				return;
 
-			var pawn = _player.PlayerPawn.Value;
-			_entity.Teleport(
-				new Vector(
-					pawn.AbsOrigin.X,
-					pawn.AbsOrigin.Y,
-					pawn.AbsOrigin.Z + (isDucking ? DUCK_HEIGHT : STAND_HEIGHT)
-				),
-				pawn.EyeAngles,
-				pawn.AbsVelocity
-			);
+			var playerPawn = _player.PlayerPawn.Value!;
+			var basePos = GetEyePosition(_player);
+
+			var pos = _plugin.Config.FlashlightDistanceFromBody > 0
+				? basePos + GetDirectionOffset(playerPawn.AbsRotation!.Y, _plugin.Config.FlashlightDistanceFromBody)
+				: basePos;
+
+			Entity.Teleport(pos, playerPawn.EyeAngles!);
 		}
 
 		public void Remove()
 		{
-			if (_isDisposed || _entity == null || !_entity.IsValid)
+			if (_isDisposed || Entity == null)
 				return;
 
-			_entity.Remove();
-			_entity = null;
+			if (Entity.IsValid)
+				Entity.Remove();
+
+			Entity = null;
 		}
 
 		public void Dispose()

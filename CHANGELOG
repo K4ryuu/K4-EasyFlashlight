@@ -1,0 +1,8 @@
+-- 2024.12.20 - v1.0.1
+
+- feat: Added configuration auto-updater
+- feat: Added option to customize the flashlight button
+- feat: Added option to hide others' flashlights
+- feat: Added `FlashlightDistanceFromBody` to move the light away from the body to avoid casting shadows on the hand
+- optimize: Improved duck detection algorithm
+- fix: Resolved an issue preventing some users from using the flashlight
